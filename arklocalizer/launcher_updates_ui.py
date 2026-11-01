@@ -155,7 +155,7 @@ class LibraryUpdatesUI:
         actions.pack(fill="x", pady=(12, 0))
         self._button(actions, "更新所选词库", self._download_words, kind="primary").pack(side="left")
         self._button(actions, "下载软件并重启更新", self._download_software, kind="secondary").pack(side="left", padx=8)
-        self._button(actions, "发布页面", lambda: webbrowser.open("https://github.com/2845086683/ArknightsLocalizationToolkit/releases"), kind="secondary").pack(side="left")
+        self._button(actions, "发布页面", lambda: webbrowser.open("https://github.com/weirj2016-ai/ArknightsLocalizationToolkit/releases"), kind="secondary").pack(side="left")
         self.update_details.pack_forget()
         actions.pack_configure(side="bottom")
         self.update_details.pack(fill="both", expand=True)

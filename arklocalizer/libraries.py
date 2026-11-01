@@ -13,7 +13,8 @@ from .util import sha256_file, write_json
 MANIFEST = "ARKLOCALIZER_MANIFEST.json"
 METADATA = "WORDLIBRARY.json"
 TRANSLATIONS = "BepInEx/Translation/"
-REPOSITORY = "2845086683/ArknightsLocalizationToolkit"
+REPOSITORY = "weirj2016-ai/ArknightsLocalizationToolkit"
+OFFICIAL_LIBRARY_ID_REPOSITORY = "2845086683/ArknightsLocalizationToolkit"
 
 
 def library_root(project: Path) -> Path:
@@ -25,7 +26,8 @@ def official_relative(locale: str) -> str:
 
 
 def official_id(locale: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://github.com/{REPOSITORY}/libraries/{locale}"))
+    # Keep the ID namespace stable across forks so existing installs retain their library IDs.
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://github.com/{OFFICIAL_LIBRARY_ID_REPOSITORY}/libraries/{locale}"))
 
 
 def relative_path(relative: str) -> PurePosixPath:

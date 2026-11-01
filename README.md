@@ -94,8 +94,10 @@ C:\YostarGames\Arknights_JP\Arknights.exe
 
 如需生成连接诊断报告，可运行 `明日方舟汉化启动器.exe --check-updates 更新检查.json`；它使用相同更新流程，仅检查并写入报告，不下载更新或修改游戏。
 
-- **词库跟随 Git**：使用当前 Origin `2845086683/ArknightsLocalizationToolkit` 的默认分支，将检查到的提交 SHA 固定用于清单与全部文本下载。官方双服词库分别关联仓库 `runtime/en-zh-offline-final`、`runtime/jp-zh-offline-final`，并兼容迁移前 Git 提交中的旧路径。只更新清单列出的翻译文本，不用 Git 上的插件覆盖本机软件；自建词库没有来源时不会自动关联官方库。
+- **词库跟随 Git**：使用当前 fork `weirj2016-ai/ArknightsLocalizationToolkit` 的默认分支，将检查到的提交 SHA 固定用于清单与全部文本下载。官方双服词库分别关联仓库 `runtime/en-zh-offline-final`、`runtime/jp-zh-offline-final`，并兼容迁移前 Git 提交中的旧路径。只更新清单列出的翻译文本，不用 Git 上的插件覆盖本机软件；自建词库没有来源时不会自动关联官方库。
 - **软件跟随 Releases**：仅提示更高版本的正式 Release，下载唯一的 `ArknightsLocalizationToolkit*.zip`，核对 GitHub 返回的 SHA-256。退出后替换完整 Release 中的启动器、代码和构建工具，以及双服官方词库（包含翻译文本）；官方库按固定 ID 识别，改名后仍能更新。自建词库全部文件保持不变，用户配置、构建环境及缓存保留。代码目录整体替换，移除已废弃的旧模块。已有游戏文件需要再点“安装 / 修复并启动”才会更新。
+
+从上游 v2.0.0 安装的旧版本还在检查原始仓库。切换到本 fork 的 v2.0.1 需要先手动安装一次完整发布包；之后软件和词库更新会检查本 fork。
 - **来源可切换**：支持 GitHub 直连或 GitHub 镜像。预填 `https://gh-proxy.com/`；镜像地址可随时改成其他 HTTPS 前缀。HTTP(S) 代理也在此弹窗设置。
 - **失败恢复**：下载到临时目录并逐文件校验后才替换；词库旧版保存在 `runtime/.backups`。软件更新保留 EXE 的 `.previous` 备份，代码与官方词库备份、安装计划和日志位于 `work/updates`；安装失败会恢复已经替换的文件及目录。
 
