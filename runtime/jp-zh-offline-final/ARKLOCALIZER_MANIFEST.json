@@ -267,23 +267,23 @@
     },
     {
       "path": "BepInEx/Translation/zh/Text/10_i18n.txt",
-      "bytes": 219906,
-      "sha256": "010f7b73f543f761032035cb0a140231b0954483e9d5bd7d37bc3e0684e2d6d7"
+      "bytes": 219888,
+      "sha256": "a70579bcb27466e5a57ac495c2de2c14a8af7ab48048c9b6880ded10b25856b2"
     },
     {
       "path": "BepInEx/Translation/zh/Text/15_format_regex.txt",
-      "bytes": 20600,
-      "sha256": "2195b158b545d57459b19d9768938bc9ed1b36e87a9abfcb3663dfe419d88289"
+      "bytes": 1141,
+      "sha256": "2167f502836cd192b077117ce97d6a1685e477d42d6d7914e848964e9efe035a"
     },
     {
       "path": "BepInEx/Translation/zh/Text/20_tables.txt",
-      "bytes": 33562039,
-      "sha256": "21e4d16b1db7d687f1e723e3afeeba6e772a9050d4f110002af72985e173c9d3"
+      "bytes": 33432039,
+      "sha256": "4fe41336327421469c4fc0a046f35e8a4fc50c7eb78d70ab07d31841f54c55b2"
     },
     {
       "path": "BepInEx/Translation/zh/Text/30_story.txt",
-      "bytes": 61786878,
-      "sha256": "4618f21f402e597cad06b751d2264897d19801b21e2e848f645c28cf0b3acff6"
+      "bytes": 62268711,
+      "sha256": "70303b9ad70edfc57bca969b49991712414c66878dec8be85493a3991f7ff6f6"
     },
     {
       "path": "changelog.txt",
