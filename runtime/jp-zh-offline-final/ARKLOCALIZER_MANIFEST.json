@@ -277,13 +277,13 @@
     },
     {
       "path": "BepInEx/Translation/zh/Text/20_tables.txt",
-      "bytes": 33432039,
-      "sha256": "4fe41336327421469c4fc0a046f35e8a4fc50c7eb78d70ab07d31841f54c55b2"
+      "bytes": 33481356,
+      "sha256": "38d9a5e079ead945add3f6b1121f035fb54b23935519b80797f96769198c3c91"
     },
     {
       "path": "BepInEx/Translation/zh/Text/30_story.txt",
-      "bytes": 62268711,
-      "sha256": "70303b9ad70edfc57bca969b49991712414c66878dec8be85493a3991f7ff6f6"
+      "bytes": 62278457,
+      "sha256": "22ba9c71eadc3adea1a9b6a67b5e344d2b039f6ea9063ac4d88e83cdbc2e6200"
     },
     {
       "path": "changelog.txt",
