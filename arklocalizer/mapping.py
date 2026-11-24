@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -47,6 +49,41 @@ POSITIONAL_FORMAT_RE = re.compile(
 AUTO_CHESS_SEASON_RE = re.compile(r"^act(?P<index>\d+)autochess$", re.IGNORECASE)
 AUTO_CHESS_DEBUG_TARGET_RE = re.compile(r"^\s*【\d+】")
 AUTO_CHESS_FORMAT_SPAN_RE = re.compile(r"<@[^>]+>(.*?)</>", re.IGNORECASE | re.DOTALL)
+ROGUELIKE_THEME_RE = re.compile(r"^rogue_(?P<index>\d+)$", re.IGNORECASE)
+ROGUELIKE_ITEM_TEXT_FIELDS = frozenset(
+    {"name", "description", "usage", "shortUsage", "unlockCondDesc"}
+)
+ROGUELIKE_ITEM_TEXT_PRIORITY = (
+    "usage",
+    "description",
+    "shortUsage",
+    "name",
+    "unlockCondDesc",
+)
+ROGUELIKE_CURRENCY_MARKERS = (
+    "源石錐",
+    "遊覧券",
+    "花銭",
+    "衡銭",
+    "厲銭",
+    "通宝",
+    "銭匣",
+    "燭火",
+)
+# This exact source occurs four times in the current Integrated Strategies
+# theme with two equally frequent CN variants that differ only in punctuation
+# and numeral style. XUnity cannot select by item ID, so prefer the variant
+# that preserves the source's Arabic numeral.
+ROGUELIKE_ITEM_TIE_BREAKS = {
+    "振り出されると、源石錐+8。この通宝を失った際、源石錐を最大で60個消費し、消費された源石錐12個ごとにランダムに秘宝を1つ獲得": (
+        "投出时，源石锭+8。失去时，消耗至多60源石锭，每消耗12源石锭获得1个随机收藏品"
+    ),
+    # The same full effect is stored in both ``usage`` and ``shortUsage``;
+    # prefer the official ``usage`` wording with the translated class labels.
+    "【速射手】・【旋輪射手】・【哨戒衛士】が敵にダメージを与えるたび、25%の確率で追加の弾を1発発射し、攻撃力の200%の範囲物理ダメージを与える": (
+        "【速射手】【回环射手】【哨戒铁卫】每次攻击命中时，有25%概率发射一枚额外子弹，造成相当于攻击力200%的群体物理伤害"
+    ),
+}
 
 # A few labels on the operator screens are compiled into the client rather
 # than present as standalone values in string_map.txt.  Keep this deliberately
@@ -119,6 +156,17 @@ BUILTIN_OVERRIDES: dict[str, dict[str, str]] = {
     },
 }
 
+BUILTIN_EXCLUSIONS: dict[str, set[str]] = {
+    "jp": {
+        # This JP sentence means "the other warriors have already gone to the
+        # battlefield". A reused cross-server i18n key points at unrelated CN
+        # text ("we have limited manpower, Doctor"), so keep it out of every
+        # context-free translation category after manual review.
+        "他の戦士たちはすでに戦場へ赴いた",
+    },
+    "en": set(),
+}
+
 
 @dataclass
 class TargetEvidence:
@@ -137,12 +185,17 @@ class MappingAccumulator:
         self.resolved_collisions: list[dict[str, Any]] = []
         self.runtime_format_pairs: list[tuple[str, str]] = []
         self.auto_chess_garrison_pairs: list[tuple[str, str]] = []
+        self.roguelike_theme_display_pairs: list[tuple[str, str]] = []
+        self.excluded_sources = {
+            normalize_lookup_text(source.replace("\x00", ""))
+            for source in BUILTIN_EXCLUSIONS[source_locale]
+        }
         self.total_seen = 0
 
     def add_override(self, source: str, target: str, provenance: str) -> None:
         source = normalize_lookup_text(source.replace("\x00", ""))
         target = normalize_lookup_text(target.replace("\x00", ""))
-        if source and target and source != target:
+        if source and target and source != target and source not in self.excluded_sources:
             self.overrides[source] = (target, provenance)
 
     def add(
@@ -156,6 +209,9 @@ class MappingAccumulator:
         self.total_seen += 1
         source = normalize_lookup_text(source.replace("\x00", ""))
         target = normalize_lookup_text(target.replace("\x00", ""))
+        if source in self.excluded_sources:
+            self.rejected["builtin_source_exclusion"] += 1
+            return
         if not source or not target or source == target:
             self.rejected["empty_or_identical"] += 1
             return
@@ -201,6 +257,7 @@ class MappingAccumulator:
         if (
             source
             and target
+            and source not in self.excluded_sources
             and source != target
             and contains_han(target)
             and looks_like_source_language(source, self.source_locale)
@@ -223,26 +280,33 @@ class MappingAccumulator:
                     key=lambda item: (-item[1].count, item[0]),
                 )
                 total = sum(evidence.count for _, evidence in ranked)
-                winner, winner_evidence = ranked[0]
+                target_equivalences = {
+                    _target_format_equivalence_key(target)
+                    for target, _ in ranked
+                }
+                winner_evidence = ranked[0][1]
                 runner_up_count = ranked[1][1].count
-                # XUnity performs a context-free lookup.  When official data
-                # overwhelmingly uses one translation, retaining that target
-                # gives better UI coverage than discarding every occurrence.
-                # Ties and weak/one-off majorities remain quality-gated.
-                if (
+                if self.source_locale == "jp" and len(target_equivalences) == 1:
+                    target, evidence = max(
+                        ranked,
+                        key=lambda item: (
+                            item[1].count,
+                            _target_format_preference(source, item[0]),
+                            item[0],
+                        ),
+                    )
+                    resolution = "format-equivalent"
+                elif (
+                    # XUnity performs a context-free lookup. When official
+                    # data overwhelmingly uses one translation, retaining
+                    # that target gives better coverage. Ties and weak
+                    # majorities remain quality-gated.
                     winner_evidence.count >= 3
                     and winner_evidence.count >= runner_up_count + 2
                     and winner_evidence.count / total >= 0.60
                 ):
-                    target, evidence = winner, winner_evidence
-                    self.resolved_collisions.append(
-                        {
-                            "source": source,
-                            "target": target,
-                            "winner_count": evidence.count,
-                            "total_count": total,
-                        }
-                    )
+                    target, evidence = ranked[0]
+                    resolution = "majority"
                 else:
                     collisions.append(
                         {
@@ -259,6 +323,21 @@ class MappingAccumulator:
                         }
                     )
                     continue
+                self.resolved_collisions.append(
+                    {
+                        "source": source,
+                        "target": target,
+                        "winner_count": evidence.count,
+                        "total_count": total,
+                        "resolution": resolution,
+                        "candidates": [
+                            {"target": candidate, "count": candidate_evidence.count}
+                            for candidate, candidate_evidence in sorted(
+                                targets.items(), key=lambda item: item[0]
+                            )
+                        ],
+                    }
+                )
             else:
                 target, evidence = next(iter(targets.items()))
             category = min(
@@ -278,6 +357,82 @@ class MappingAccumulator:
 def strip_display_markup(text: str) -> str:
     """Return the text Arknights ultimately shows after rich/custom tags."""
     return DISPLAY_TAG_RE.sub("", text)
+
+
+_TARGET_EQUIVALENCE_PROTECTED_RE = re.compile(
+    RICH_TEXT_TAG_RE.pattern + r"|\{\{[^{}]+\}\}|\{[^{}\r\n]+\}",
+    re.IGNORECASE,
+)
+_TARGET_PUNCTUATION_TRANSLATION = str.maketrans(
+    {
+        ",": "，",
+        "、": "，",
+        ";": "；",
+        ":": "：",
+        "!": "！",
+        "?": "？",
+        "(": "（",
+        ")": "）",
+        "%": "%",
+        "％": "%",
+        "＋": "+",
+        "－": "-",
+    }
+)
+
+
+def _target_format_equivalence_key(text: str) -> str:
+    """Normalize only whitespace and equivalent punctuation in CN variants.
+
+    Keep rich-text tags and interpolation tokens byte-for-byte so formatting
+    and runtime placeholders remain part of the comparison.
+    """
+
+    def normalize_visible(segment: str) -> str:
+        # Preserve ordinary spaces as one space. Removing them outright could
+        # merge distinct Latin names or labels such as ``A B`` and ``AB``.
+        segment = re.sub(r"\s+", " ", segment)
+        output: list[str] = []
+        for index, char in enumerate(segment):
+            if unicodedata.category(char).startswith("P"):
+                normalized = unicodedata.normalize("NFKC", char)
+                if all(
+                    unicodedata.category(part).startswith("P")
+                    for part in normalized
+                ):
+                    char = normalized
+            if char == ".":
+                decimal_point = (
+                    index > 0
+                    and index + 1 < len(segment)
+                    and segment[index - 1].isdigit()
+                    and segment[index + 1].isdigit()
+                )
+                output.append("." if decimal_point else "。")
+            elif char == "。":
+                output.append(char)
+            else:
+                output.append(char.translate(_TARGET_PUNCTUATION_TRANSLATION))
+        return "".join(output)
+
+    pieces: list[str] = []
+    cursor = 0
+    for match in _TARGET_EQUIVALENCE_PROTECTED_RE.finditer(text):
+        pieces.append(normalize_visible(text[cursor : match.start()]))
+        pieces.append("\uFFF0" + match.group(0) + "\uFFF1")
+        cursor = match.end()
+    pieces.append(normalize_visible(text[cursor:]))
+    return "".join(pieces)
+
+
+def _target_format_preference(source: str, target: str) -> tuple[int, int, int]:
+    """Choose a readable official CN variant when candidates only format-differ."""
+
+    source_breaks = len(re.findall(r"\r\n|\r|\n", source))
+    target_breaks = len(re.findall(r"\r\n|\r|\n", target))
+    punctuation_score = sum(char in "，、。；：！？（）“”‘’" for char in target)
+    punctuation_score -= sum(char in ",.;:!?()" for char in target)
+    return (-abs(source_breaks - target_breaks), punctuation_score, -len(target))
 
 
 def positional_format_regex_pair(source: str, target: str) -> tuple[str, str] | None:
@@ -551,6 +706,164 @@ def collect_auto_chess_garrison_display_pairs(
     return pairs, stats
 
 
+def collect_roguelike_theme_display_pairs(
+    source_data: Any,
+    target_data: Any,
+    source_locale: str,
+) -> tuple[list[tuple[str, str]], dict[str, Any]]:
+    """Collect missing display text from the latest shared JP roguelike theme.
+
+    Roguelike names and descriptions are reused across themes, where official
+    CN wording can differ. The normal context-free collision filter drops
+    those sources. The latest shared theme's matched item rows provide a
+    narrower source of truth. Collect its display fields plus any text
+    containing currency terminology. When a source occurs in both full and
+    abbreviated fields, the full ``usage`` field wins; other conflicts need a
+    clear majority or an explicit tie-break. Existing dictionary decisions
+    remain unchanged.
+    """
+
+    stats: dict[str, Any] = {
+        "theme": None,
+        "items": 0,
+        "source_candidates": 0,
+        "identical_sources": 0,
+        "field_priority_resolved_sources": 0,
+        "majority_resolved_sources": 0,
+        "tie_break_sources": 0,
+        "ambiguous_sources": 0,
+        "pairs": 0,
+    }
+    if source_locale != "jp" or not isinstance(source_data, dict) or not isinstance(
+        target_data, dict
+    ):
+        return [], stats
+
+    source_details = source_data.get("details")
+    target_details = target_data.get("details")
+    if not isinstance(source_details, dict) or not isinstance(target_details, dict):
+        return [], stats
+
+    common_themes: list[tuple[int, str]] = []
+    for name in source_details.keys() & target_details.keys():
+        match = ROGUELIKE_THEME_RE.fullmatch(str(name))
+        if match:
+            common_themes.append((int(match.group("index")), str(name)))
+    if not common_themes:
+        return [], stats
+
+    _, theme = max(common_themes)
+    stats["theme"] = theme
+    source_theme = source_details.get(theme)
+    target_theme = target_details.get(theme)
+    if not isinstance(source_theme, dict) or not isinstance(target_theme, dict):
+        return [], stats
+    source_items = source_theme.get("items")
+    target_items = target_theme.get("items")
+    if not isinstance(source_items, dict) or not isinstance(target_items, dict):
+        return [], stats
+
+    common_items = source_items.keys() & target_items.keys()
+    stats["items"] = len(common_items)
+    candidates: dict[str, dict[str, Counter[str]]] = defaultdict(
+        lambda: defaultdict(Counter)
+    )
+    identical_sources: set[str] = set()
+    for item_key in sorted(common_items):
+        source_item = source_items[item_key]
+        target_item = target_items[item_key]
+        for source, target, path in walk_paired(source_item, target_item):
+            is_item_display_field = (
+                len(path) == 1 and path[0] in ROGUELIKE_ITEM_TEXT_FIELDS
+            )
+            has_currency_marker = any(
+                marker in source for marker in ROGUELIKE_CURRENCY_MARKERS
+            )
+            if not is_item_display_field and not has_currency_marker:
+                continue
+            source = normalize_lookup_text(source.replace("\x00", ""))
+            target = normalize_lookup_text(target.replace("\x00", ""))
+            if not source or not target or source.casefold().startswith("unused"):
+                continue
+            if source == target:
+                identical_sources.add(source)
+                continue
+            if (
+                len(source) > 1000
+                or len(target) > 4000
+                or not contains_han(target)
+                or not looks_like_source_language(source, source_locale)
+                or placeholder_counter(strip_display_markup(source))
+                != placeholder_counter(strip_display_markup(target))
+            ):
+                continue
+            evidence_field = path[0] if path else ""
+            candidates[source][evidence_field][target] += 1
+
+    stats["source_candidates"] = len(candidates) + len(identical_sources)
+    resolved_candidates: dict[str, str] = {}
+    for source, field_targets in candidates.items():
+        selected_field = next(
+            (
+                field_name
+                for field_name in ROGUELIKE_ITEM_TEXT_PRIORITY
+                if field_targets.get(field_name)
+            ),
+            None,
+        )
+        if selected_field is None:
+            targets: Counter[str] = Counter()
+            for field_counter in field_targets.values():
+                targets.update(field_counter)
+        else:
+            targets = field_targets[selected_field]
+
+        all_targets = {
+            target
+            for field_counter in field_targets.values()
+            for target in field_counter
+        }
+        if len(targets) == 1:
+            resolved_candidates[source] = next(iter(targets))
+            if len(all_targets) > 1:
+                stats["field_priority_resolved_sources"] += 1
+            continue
+
+        ranked = targets.most_common()
+        if ranked[0][1] > ranked[1][1]:
+            resolved_candidates[source] = ranked[0][0]
+            stats["majority_resolved_sources"] += 1
+            continue
+
+        tie_break = ROGUELIKE_ITEM_TIE_BREAKS.get(source)
+        if tie_break is not None and tie_break in targets:
+            resolved_candidates[source] = tie_break
+            stats["tie_break_sources"] += 1
+        else:
+            stats["ambiguous_sources"] += 1
+
+    display_candidates: dict[str, set[str]] = defaultdict(set)
+    for source, target in resolved_candidates.items():
+        display_candidates[source].add(target)
+        plain_source = strip_display_markup(source)
+        plain_target = strip_display_markup(target)
+        if plain_source != source or plain_target != target:
+            display_candidates[plain_source].add(plain_target)
+
+    ambiguous_sources = {
+        source for source, targets in display_candidates.items() if len(targets) != 1
+    }
+    stats["ambiguous_sources"] += len(ambiguous_sources)
+    pairs = [
+        (source, next(iter(targets)))
+        for source, targets in display_candidates.items()
+        if source not in ambiguous_sources and len(targets) == 1
+    ]
+    pairs.sort(key=lambda pair: (pair[0].casefold(), pair[0]))
+    stats["pairs"] = len(pairs)
+    return pairs, stats
+
+
 def merge_missing_pairs(
     pairs_by_category: dict[str, list[tuple[str, str]]],
     preferred_pairs: list[tuple[str, str]],
@@ -578,7 +891,7 @@ def merge_missing_pairs(
             preserved += 1
         else:
             # The current pack already made a usable decision for this exact
-            # source.  Never let the focused Auto Chess recovery path change it.
+            # source. Never let a focused recovery path change that decision.
             conflicts += 1
     output.sort(key=lambda pair: (pair[0].casefold(), pair[0]))
     return {"added": added, "preserved": preserved, "conflicts": conflicts}
@@ -950,6 +1263,17 @@ def _collect_tables(
         "ambiguous_sources": 0,
         "pairs": 0,
     }
+    roguelike_theme_display: dict[str, Any] = {
+        "theme": None,
+        "items": 0,
+        "source_candidates": 0,
+        "identical_sources": 0,
+        "field_priority_resolved_sources": 0,
+        "majority_resolved_sources": 0,
+        "tie_break_sources": 0,
+        "ambiguous_sources": 0,
+        "pairs": 0,
+    }
     unwrapped_roots: dict[str, list[str]] = {"source": [], "target": []}
     for name in common:
         source_data = read_json(source_files[name])
@@ -971,6 +1295,15 @@ def _collect_tables(
                 )
             )
             accumulator.auto_chess_garrison_pairs.extend(garrison_pairs)
+        if name == "roguelike_topic_table.json":
+            theme_pairs, roguelike_theme_display = (
+                collect_roguelike_theme_display_pairs(
+                    source_data,
+                    target_data,
+                    accumulator.source_locale,
+                )
+            )
+            accumulator.roguelike_theme_display_pairs.extend(theme_pairs)
         table_pairs = 0
         for source, target, path in walk_paired(source_data, target_data):
             observed_count += _add_display_pair(
@@ -1025,6 +1358,7 @@ def _collect_tables(
         "skill_display": skill_display,
         "mission_semantic": mission_semantic,
         "auto_chess_garrison": auto_chess_garrison,
+        "roguelike_theme_display": roguelike_theme_display,
         "parameterized_display": parameterized_display,
         "unwrapped_roots": unwrapped_roots,
         "per_table": per_table,
@@ -1075,11 +1409,20 @@ def _write_placeholder_mismatches(path: Path, items: list[dict[str, Any]]) -> No
 
 
 def _write_resolved_collisions(path: Path, items: list[dict[str, Any]]) -> None:
-    """Expose context collisions whose dominant target was kept globally."""
+    """Expose context collisions resolved by majority or formatting equivalence."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(("source", "target", "winner_count", "total_count"))
+        writer.writerow(
+            (
+                "source",
+                "target",
+                "winner_count",
+                "total_count",
+                "resolution",
+                "candidates",
+            )
+        )
         for item in items:
             writer.writerow(
                 (
@@ -1087,6 +1430,8 @@ def _write_resolved_collisions(path: Path, items: list[dict[str, Any]]) -> None:
                     item["target"],
                     item["winner_count"],
                     item["total_count"],
+                    item["resolution"],
+                    json.dumps(item["candidates"], ensure_ascii=False),
                 )
             )
 
@@ -1147,6 +1492,10 @@ def build_translation_pack(
     table_stats["auto_chess_garrison"]["merge"] = merge_missing_pairs(
         by_category,
         accumulator.auto_chess_garrison_pairs,
+    )
+    table_stats["roguelike_theme_display"]["merge"] = merge_missing_pairs(
+        by_category,
+        accumulator.roguelike_theme_display_pairs,
     )
     finalized_runtime_pairs = [
         pair
