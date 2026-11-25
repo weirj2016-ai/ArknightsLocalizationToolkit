@@ -84,6 +84,20 @@ def _emit_segment_pairs(
     return count
 
 
+def _translation_skeleton(line: StoryLine) -> tuple[str, tuple[str, ...], bool] | None:
+    """Describe only the line structure that contributes visible text."""
+    attributes = tuple(
+        sorted(name for name in line.attributes if name in TRANSLATABLE_ATTRIBUTES)
+    )
+    # Comments stored after non-text commands do not appear in the game and
+    # should not block alignment of the visible text lines.
+    visible_tail = bool(line.tail and not line.tail.startswith("//"))
+    if not visible_tail and not attributes:
+        return None
+    command = line.skeleton.split("|", 1)[0]
+    return command, attributes, visible_tail
+
+
 def collect_story_pairs(
     source_root: Path,
     target_root: Path,
@@ -91,6 +105,7 @@ def collect_story_pairs(
     *,
     max_files: int | None = None,
     allow_fuzzy: bool = False,
+    add_nontext_aligned: Callable[[str, str, str], None] | None = None,
 ) -> dict[str, int]:
     source_files = relative_files(source_root, "*.txt")
     target_files = relative_files(target_root, "*.txt")
@@ -109,6 +124,7 @@ def collect_story_pairs(
         "target_files": len(target_files),
         "common_files": len(common),
         "exact_structure_files": 0,
+        "nontext_structure_files": 0,
         "fuzzy_structure_files": 0,
         "skipped_structure_mismatch_files": 0,
         "matched_lines": 0,
@@ -127,32 +143,60 @@ def collect_story_pairs(
         ]
         source_skeleton = [line.skeleton for line in source_lines]
         target_skeleton = [line.skeleton for line in target_lines]
+        aligned_pairs: list[tuple[int, int]] | None = None
+        use_nontext_callback = False
         if source_skeleton == target_skeleton:
             stats["exact_structure_files"] += 1
-            blocks = ((0, 0, len(source_lines)),)
-        elif allow_fuzzy:
-            stats["fuzzy_structure_files"] += 1
-            blocks = (
-                (block.a, block.b, block.size)
-                for block in SequenceMatcher(
-                    None,
-                    source_skeleton,
-                    target_skeleton,
-                    autojunk=False,
-                ).get_matching_blocks()
-            )
+            aligned_pairs = [(index, index) for index in range(len(source_lines))]
         else:
+            source_text = [
+                (index, _translation_skeleton(line))
+                for index, line in enumerate(source_lines)
+            ]
+            target_text = [
+                (index, _translation_skeleton(line))
+                for index, line in enumerate(target_lines)
+            ]
+            source_text = [(index, signature) for index, signature in source_text if signature]
+            target_text = [(index, signature) for index, signature in target_text if signature]
+            if [signature for _, signature in source_text] == [
+                signature for _, signature in target_text
+            ] and source_text and add_nontext_aligned is not None:
+                stats["nontext_structure_files"] += 1
+                aligned_pairs = [
+                    (source_index, target_index)
+                    for (source_index, _), (target_index, _) in zip(source_text, target_text)
+                ]
+                use_nontext_callback = True
+        if aligned_pairs is None and allow_fuzzy:
+            stats["fuzzy_structure_files"] += 1
+            blocks = SequenceMatcher(
+                None,
+                source_skeleton,
+                target_skeleton,
+                autojunk=False,
+            ).get_matching_blocks()
+            aligned_pairs = [
+                (block.a + offset, block.b + offset)
+                for block in blocks
+                for offset in range(block.size)
+            ]
+        elif aligned_pairs is None:
             stats["skipped_structure_mismatch_files"] += 1
             continue
-        for source_start, target_start, size in blocks:
-            for offset in range(size):
-                source_line = source_lines[source_start + offset]
-                target_line = target_lines[target_start + offset]
-                stats["matched_lines"] += 1
-                stats["emitted_segments"] += _emit_segment_pairs(
-                    source_line,
-                    target_line,
-                    add,
-                    f"story:{key}:{source_start + offset + 1}",
-                )
+        for source_index, target_index in aligned_pairs:
+            source_line = source_lines[source_index]
+            target_line = target_lines[target_index]
+            stats["matched_lines"] += 1
+            callback = (
+                add_nontext_aligned
+                if use_nontext_callback and add_nontext_aligned is not None
+                else add
+            )
+            stats["emitted_segments"] += _emit_segment_pairs(
+                source_line,
+                target_line,
+                callback,
+                f"story:{key}:{source_index + 1}",
+            )
     return stats

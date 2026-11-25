@@ -12,6 +12,7 @@ from typing import Any
 
 from .story import collect_story_pairs
 from .util import (
+    EXTENDED_IDENTITY_FIELDS,
     contains_han,
     field_is_probably_identifier,
     looks_like_source_language,
@@ -20,6 +21,7 @@ from .util import (
     read_json,
     RICH_TEXT_TAG_RE,
     walk_paired,
+    walk_unpaired_identity_pairs,
     write_json,
 )
 from .xunity import write_translation_file
@@ -70,6 +72,9 @@ ROGUELIKE_CURRENCY_MARKERS = (
     "銭匣",
     "燭火",
 )
+JP_GACHA_SUMMARY_RE = re.compile(
+    r"^(?P<month>[0-9]{1,2})月(?P<day>[0-9]{1,2})日(?P<time>[0-9]{2}:[0-9]{2})まで$"
+)
 # This exact source occurs four times in the current Integrated Strategies
 # theme with two equally frequent CN variants that differ only in punctuation
 # and numeral style. XUnity cannot select by item ID, so prefer the variant
@@ -117,6 +122,28 @@ BUILTIN_OVERRIDES: dict[str, dict[str, str]] = {
         "昇進段階2開放": "精英阶段2解锁",
         "昇進段階2強化": "精英阶段2强化",
         "昇進段階2に昇進後解放": "精英阶段2后解锁",
+        # JP-only i18n strings in the arcade and account/settings screens.
+        # These translations retain every color tag and interpolation token.
+        "<color=#C8D6F6>トロフィー</color>{0}\n<color=#C8D6F6>がランクアップしました</color>": (
+            "<color=#C8D6F6>奖杯</color>{0}\n<color=#C8D6F6>已升级</color>"
+        ),
+        "{0}<color=#C8D6F6>の新しいステージが解放されました</color>": (
+            "{0}<color=#C8D6F6>的新关卡已解锁</color>"
+        ),
+        "前のステージがランク{0}到達後解放": "前置关卡达到{0}得分评级后解锁",
+        "{0}後解放": "{0}后开放",
+        "ログイン画面に戻りますか？": "是否返回登录界面？",
+        "交換しますか？": "是否兑换？",
+        "※サポートへ連絡できます": "※可联系客服",
+        "次の無料スカウトまで": "距离下次赠送寻访",
+        "※現在の純正源石所持数を確認できます": "※可查看当前持有的至纯源石数量",
+        "返金ポリシー": "退款政策",
+        "有償純正源石から先に消費されます。": "优先消耗付费至纯源石。",
+        # The Japanese settings keys use these short labels without the more
+        # specific wording present in a few other CN table contexts.
+        "その他": "其他",
+        "お知らせ": "公告",
+        "プレビュー": "预览",
         # Auto Chess renders these two descriptions from client-side format
         # strings instead of assigning the corresponding activity-table value
         # verbatim. They therefore have no exact key in the public JP dump.
@@ -156,6 +183,129 @@ BUILTIN_OVERRIDES: dict[str, dict[str, str]] = {
     },
 }
 
+# JP gacha-pool IDs and release schedules do not align one-to-one with CN.
+# Translate the visible Japanese pool names directly instead of pairing by ID.
+JP_GACHA_POOL_NAME_OVERRIDES: dict[str, str] = {
+    "スカウト最初の10回以内に★5以上確定！": "前10次寻访中必得★5及以上干员！",
+    "連合作戦": "联合行动",
+    "セレクトスカウト": "定向甄选",
+    "先途追想": "循光道途",
+    "ロドスの道のり・中堅": "罗德岛之路·中坚",
+    "さすらう者": "漂泊者",
+    "ハートオブスチール": "钢铁之心",
+    "不協和音程": "不协和音程",
+    "在りし日の幻影": "往日幻象",
+    "地生五金": "地生五金",
+    "型破りの騎士道": "不拘一格的骑士道",
+    "執裁者": "执裁者",
+    "実証、完成、先導": "证实，完成，指引",
+    "峡谷に芽吹く君影草": "君影轻灵",
+    "曇りなき紅蓮": "无瑕红莲",
+    "枯火に咲く花": "枯焰生花",
+    "死か/終わりか": "如死亦终",
+    "死火より出づ": "自死火中诞生",
+    "海淵に沈む錨": "沉入海渊的锚",
+    "潮汐断ちし剣": "搅动潮汐之剑",
+    "砂海の旅人": "砂海旅人",
+    "砂漠の導き手": "沙漠引路人",
+    "自由な虜囚": "自由的囚徒",
+    "逆巻く奔流": "不羁逆流",
+    "進攻-防衛-戦術衝突": "进攻·防守·战术交汇",
+    "雪解けの誓い": "雪融之诺",
+    "テラ飯、ああ、テラ飯": "泰拉饭，呜呼，泰拉饭",
+    "ホリデースター": "假日之星",
+    "ロドスの道のり　回顧": "罗德岛之路　回顾",
+    "ロドスの道のり・展望": "罗德岛之路·展望",
+    "ロドスの道のり・心願": "罗德岛之路·心愿",
+    "ロドスの道のり・期待": "罗德岛之路·期待",
+    "ロドスの道のり・邂逅": "罗德岛之路·邂逅",
+    "一筋の曙光": "瑕光微明",
+    "上の空600メートル": "神游于600米高空",
+    "交響曲『革新』": "革新交响曲",
+    "俺のやり方で": "以我的方式",
+    "光耀の騎士道": "光耀骑士道",
+    "劫尽古今": "劫尽古今",
+    "勿忘草": "勿忘我",
+    "千刃万器": "千刃万器",
+    "千秋一粟": "千秋一粟",
+    "厄災を射落とす颶風": "射落灾异的风暴",
+    "堅牢穿つ雷光": "贯穿坚壁的雷光",
+    "夏暁の守り人": "夏晓的守护者",
+    "小丘に微睡む柳": "小丘上的眠柳",
+    "帰航スカウト": "归航寻访",
+    "幽境を征く狩人": "幽境狩人",
+    "影に潜みて": "潜藏于阴影之中",
+    "心と鏡の残痕": "心与镜的残痕",
+    "悪華繚乱": "恶华缭乱",
+    "我たる所以": "何以为我",
+    "戦斧と万年筆": "战斧与钢笔",
+    "指令：再構成": "指令：重构",
+    "断崖咆号": "奔崖怒号",
+    "星火より来たる": "从星火中来",
+    "春江逢雪": "春江逢雪",
+    "月隠晦明": "月隐晦明",
+    "果てなき氷原": "无尽冰原",
+    "枷なき劫火": "无枷劫火",
+    "止まった時の中で": "静止时光之中",
+    "河畔の渡し船": "河畔渡船",
+    "流砂に刻印を": "在流沙上刻印",
+    "流砂螺旋": "流沙螺旋",
+    "海蝕": "海蚀",
+    "深悼": "深悼",
+    "濁酒澄心": "浊酒澄心",
+    "火花繚乱": "火花绽放",
+    "炎に研がれし鋭刃": "砺火成锋",
+    "煙塵に瞬く": "闪耀于烟尘之中",
+    "熱血！猛烈！大爆発！": "热血！猛烈！大爆炸！",
+    "熾吾生平": "炽吾生平",
+    "百錬成鋼": "百炼成钢",
+    "空白帯域": "空白频段",
+    "空蝉花火": "空蝉烟火",
+    "突破-補強-連続任務": "突破，援助，任务循环",
+    "約諾": "约诺",
+    "紅蓮乱舞": "红莲乱舞",
+    "自由なる伝道": "布道自由",
+    "茨道拓く一閃": "开辟荆棘之路的一闪",
+    "草原に響く笛の音": "回响在草原上的笛声",
+    "赤龍乗雲": "赤龙乘云",
+    "軸受×火花": "轴承×火花",
+    "道化たちの歌": "人偶的歌谣",
+    "遺志に咲く火の華": "于遗志中绽放的火花",
+    "雪降る暁": "雪落黎明",
+    "雲間の明晰夢": "云间清醒梦",
+    "霧煙る秘境": "雾霭秘境",
+    "青霆重明": "青霆重明",
+    "風雪に誓って": "以风雪为誓",
+    "騎士に非ず": "并非骑士",
+    "麦穂と賛美歌": "麦穗与赞美诗",
+    "龍門特別行動要員": "龙门特别行动人员",
+    "銀灰色の栄光": "银灰色的荣耀",
+}
+
+# A focused sweep of every roguelike theme found these remaining JP-only
+# currency effects and the held-recruit explanation. Preserve all rich-text
+# markers in these exact strings.
+JP_ROGUELIKE_TEXT_OVERRIDES: dict[str, str] = {
+    "源石錐<@ro2.get>+5</>、最大耐久値とシールド値<@ro2.get>+2</>": (
+        "源石锭<@ro2.get>+5</>、目标生命值上限与护盾值<@ro2.get>+2</>"
+    ),
+    "燭火を点す": "点燃烛火",
+    "源石錐を<@ro.lose>全部</>消費し、ランダムに秘宝を1つ<@ro.get>獲得</>する": (
+        "消耗<@ro.lose>全部</>源石锭，随机<@ro.get>获得</>1件收藏品"
+    ),
+    "源石錐+888": "源石锭+888",
+    "源石錐+32": "源石锭+32",
+    "遊覧券+6": "票券+6",
+    "源石錐+10、遊覧券+1": "源石锭+10、票券+1",
+    "源石錐+15": "源石锭+15",
+    "源石錐+65": "源石锭+65",
+    "非戦闘スポットに入るたび、源石錐+2": "每进入一个非战斗节点，获得源石锭+2",
+    "源石錐+30": "源石锭+30",
+    "※保留後、【燭火の導き】などのスポットで使用でき、より少ない希望で招集ができます": (
+        "※留存后可在【指点迷津】等节点使用，以更少的希望进行招募"
+    ),
+}
+
 BUILTIN_EXCLUSIONS: dict[str, set[str]] = {
     "jp": {
         # This JP sentence means "the other warriors have already gone to the
@@ -184,6 +334,7 @@ class MappingAccumulator:
         self.overrides: dict[str, tuple[str, str]] = {}
         self.resolved_collisions: list[dict[str, Any]] = []
         self.runtime_format_pairs: list[tuple[str, str]] = []
+        self.custom_format_regex_pairs: list[tuple[str, str]] = []
         self.auto_chess_garrison_pairs: list[tuple[str, str]] = []
         self.roguelike_theme_display_pairs: list[tuple[str, str]] = []
         self.excluded_sources = {
@@ -521,6 +672,43 @@ def collect_positional_format_regex_pairs(
         "emitted": len(result),
         "conflicts": conflicts,
     }
+
+
+def collect_jp_gacha_summary_regex_pair(
+    source_data: Any,
+    source_locale: str,
+) -> tuple[tuple[str, str] | None, dict[str, Any]]:
+    """Translate the repeated JP gacha expiry label while preserving its date."""
+    stats: dict[str, Any] = {
+        "pools": 0,
+        "matching_summaries": 0,
+        "unique_summaries": 0,
+        "regex_emitted": False,
+    }
+    if source_locale != "jp" or not isinstance(source_data, dict):
+        return None, stats
+    pools = source_data.get("gachaPoolClient")
+    if not isinstance(pools, list):
+        return None, stats
+    summaries: set[str] = set()
+    for pool in pools:
+        if not isinstance(pool, dict):
+            continue
+        summary = pool.get("gachaPoolSummary")
+        if not isinstance(summary, str):
+            continue
+        stats["pools"] += 1
+        if JP_GACHA_SUMMARY_RE.fullmatch(normalize_lookup_text(summary)):
+            stats["matching_summaries"] += 1
+            summaries.add(normalize_lookup_text(summary))
+    stats["unique_summaries"] = len(summaries)
+    if not summaries:
+        return None, stats
+    stats["regex_emitted"] = True
+    return (
+        r'r:"\A(?<month>[0-9]{1,2})月(?<day>[0-9]{1,2})日(?<time>[0-9]{2}:[0-9]{2})まで\z"',
+        '"结束于${month}月${day}日 ${time}"',
+    ), stats
 
 
 def is_auto_chess_runtime_format(source: str, source_locale: str) -> bool:
@@ -1226,6 +1414,7 @@ def _collect_tables(
     target_root: Path,
     accumulator: MappingAccumulator,
     fallback_source_root: Path | None = None,
+    extended_identity_accumulator: MappingAccumulator | None = None,
 ) -> dict[str, Any]:
     source_excel = source_root / "gamedata" / "excel"
     target_excel = target_root / "gamedata" / "excel"
@@ -1274,6 +1463,19 @@ def _collect_tables(
         "ambiguous_sources": 0,
         "pairs": 0,
     }
+    extended_identity_stats: dict[str, Any] = {
+        "identity_fields": list(EXTENDED_IDENTITY_FIELDS),
+        "matched_arrays": 0,
+        "candidate_pairs": 0,
+        "per_field": {},
+        "per_table": {},
+    }
+    gacha_summary_format: dict[str, Any] = {
+        "pools": 0,
+        "matching_summaries": 0,
+        "unique_summaries": 0,
+        "regex_emitted": False,
+    }
     unwrapped_roots: dict[str, list[str]] = {"source": [], "target": []}
     for name in common:
         source_data = read_json(source_files[name])
@@ -1304,6 +1506,44 @@ def _collect_tables(
                 )
             )
             accumulator.roguelike_theme_display_pairs.extend(theme_pairs)
+        if name == "gacha_table.json":
+            gacha_regex_pair, gacha_summary_format = collect_jp_gacha_summary_regex_pair(
+                source_data,
+                accumulator.source_locale,
+            )
+            if gacha_regex_pair is not None:
+                accumulator.custom_format_regex_pairs.append(gacha_regex_pair)
+        if extended_identity_accumulator is not None:
+            identity_field_counts: dict[str, int] = {}
+            candidate_pairs = 0
+            for source, target, path in walk_unpaired_identity_pairs(
+                source_data,
+                target_data,
+                stats=identity_field_counts,
+            ):
+                _add_display_pair(
+                    extended_identity_accumulator,
+                    source,
+                    target,
+                    "tables",
+                    f"table:{name}:{'/'.join(path)}:extended-id",
+                    path,
+                )
+                candidate_pairs += 1
+            if identity_field_counts:
+                extended_identity_stats["per_table"][name] = {
+                    "matched_arrays": sum(identity_field_counts.values()),
+                    "candidate_pairs": candidate_pairs,
+                    "per_field": identity_field_counts,
+                }
+                extended_identity_stats["matched_arrays"] += sum(
+                    identity_field_counts.values()
+                )
+                extended_identity_stats["candidate_pairs"] += candidate_pairs
+                for field_name, count in identity_field_counts.items():
+                    extended_identity_stats["per_field"][field_name] = (
+                        extended_identity_stats["per_field"].get(field_name, 0) + count
+                    )
         table_pairs = 0
         for source, target, path in walk_paired(source_data, target_data):
             observed_count += _add_display_pair(
@@ -1359,6 +1599,8 @@ def _collect_tables(
         "mission_semantic": mission_semantic,
         "auto_chess_garrison": auto_chess_garrison,
         "roguelike_theme_display": roguelike_theme_display,
+        "extended_identity_recovery": extended_identity_stats,
+        "gacha_summary_format": gacha_summary_format,
         "parameterized_display": parameterized_display,
         "unwrapped_roots": unwrapped_roots,
         "per_table": per_table,
@@ -1458,8 +1700,15 @@ def build_translation_pack(
         raise FileNotFoundError(f"Local source data root not found: {source_root}")
 
     accumulator = MappingAccumulator(source_locale)
+    extended_identity_accumulator = MappingAccumulator(source_locale)
+    nontext_aligned_story_accumulator = MappingAccumulator(source_locale)
     for source, target in BUILTIN_OVERRIDES[source_locale].items():
         accumulator.add_override(source, target, "builtin-ui")
+    if source_locale == "jp":
+        for source, target in JP_GACHA_POOL_NAME_OVERRIDES.items():
+            accumulator.add_override(source, target, "builtin-gacha-title")
+        for source, target in JP_ROGUELIKE_TEXT_OVERRIDES.items():
+            accumulator.add_override(source, target, "builtin-roguelike-text")
     i18n_stats = _collect_i18n(
         source_root,
         target_root,
@@ -1471,6 +1720,7 @@ def build_translation_pack(
         target_root,
         accumulator,
         fallback_source_root=public_source_root,
+        extended_identity_accumulator=extended_identity_accumulator,
     )
     story_stats: dict[str, int] | None = None
     if include_story:
@@ -1486,9 +1736,45 @@ def build_translation_pack(
             ),
             max_files=max_story_files,
             allow_fuzzy=allow_fuzzy_story,
+            add_nontext_aligned=lambda source, target, provenance: nontext_aligned_story_accumulator.add(
+                source, target, "story", provenance
+            ),
         )
 
     by_category, collisions = accumulator.finalize()
+    global_collision_sources = {item["source"] for item in collisions}
+    extended_pairs, extended_collisions = extended_identity_accumulator.finalize()
+    safe_extended_pairs = [
+        pair
+        for pairs in extended_pairs.values()
+        for pair in pairs
+        if pair[0] not in global_collision_sources
+    ]
+    table_stats["extended_identity_recovery"]["ambiguous_sources"] = len(
+        extended_collisions
+    )
+    table_stats["extended_identity_recovery"]["merge"] = merge_missing_pairs(
+        by_category,
+        safe_extended_pairs,
+    )
+    nontext_story_pairs, nontext_story_collisions = (
+        nontext_aligned_story_accumulator.finalize()
+    )
+    safe_nontext_story_pairs = [
+        pair
+        for pairs in nontext_story_pairs.values()
+        for pair in pairs
+        if pair[0] not in global_collision_sources
+    ]
+    if story_stats is not None:
+        story_stats["nontext_aligned_ambiguous_sources"] = len(
+            nontext_story_collisions
+        )
+        story_stats["nontext_aligned_merge"] = merge_missing_pairs(
+            by_category,
+            safe_nontext_story_pairs,
+            category="story",
+        )
     table_stats["auto_chess_garrison"]["merge"] = merge_missing_pairs(
         by_category,
         accumulator.auto_chess_garrison_pairs,
@@ -1509,6 +1795,11 @@ def build_translation_pack(
             "tables": accumulator.runtime_format_pairs + finalized_runtime_pairs,
         }
     )
+    for regex_pair in accumulator.custom_format_regex_pairs:
+        if regex_pair not in format_regex_pairs:
+            format_regex_pairs.append(regex_pair)
+            format_regex_stats["considered"] += 1
+            format_regex_stats["emitted"] += 1
     text_root = output_root / "Translation" / "zh" / "Text"
     file_names = {
         "i18n": "10_i18n.txt",
@@ -1535,7 +1826,17 @@ def build_translation_pack(
     )
     _write_placeholder_mismatches(
         reports / "placeholder_mismatches.csv",
-        accumulator.placeholder_mismatches,
+        accumulator.placeholder_mismatches
+        + extended_identity_accumulator.placeholder_mismatches
+        + nontext_aligned_story_accumulator.placeholder_mismatches,
+    )
+    rejected = Counter(accumulator.rejected)
+    rejected.update(extended_identity_accumulator.rejected)
+    rejected.update(nontext_aligned_story_accumulator.rejected)
+    candidate_observations = (
+        accumulator.total_seen
+        + extended_identity_accumulator.total_seen
+        + nontext_aligned_story_accumulator.total_seen
     )
     report = {
         "source_locale": source_locale,
@@ -1549,7 +1850,7 @@ def build_translation_pack(
         "i18n": i18n_stats,
         "tables": table_stats,
         "story": story_stats,
-        "candidate_observations": accumulator.total_seen,
+        "candidate_observations": candidate_observations,
         "accepted_unique": sum(len(pairs) for pairs in by_category.values()),
         "accepted_by_category": {
             category: len(pairs) for category, pairs in sorted(by_category.items())
@@ -1557,9 +1858,13 @@ def build_translation_pack(
         "collision_sources": len(collisions),
         "resolved_collision_sources": len(accumulator.resolved_collisions),
         "format_regex": format_regex_stats,
-        "builtin_overrides": len(BUILTIN_OVERRIDES[source_locale]),
-        "rejected": dict(accumulator.rejected),
-        "placeholder_mismatch_samples": len(accumulator.placeholder_mismatches),
+        "builtin_overrides": len(accumulator.overrides),
+        "rejected": dict(rejected),
+        "placeholder_mismatch_samples": len(
+            accumulator.placeholder_mismatches
+            + extended_identity_accumulator.placeholder_mismatches
+            + nontext_aligned_story_accumulator.placeholder_mismatches
+        ),
     }
     write_json(output_root / "pack-report.json", report)
     return report
