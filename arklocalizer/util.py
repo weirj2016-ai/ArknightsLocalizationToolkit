@@ -177,6 +177,22 @@ IDENTITY_FIELDS = (
     "uniEquipId",
 )
 
+# Additional stable keys used to recover text when one locale contains newer
+# records in an otherwise aligned array. Keep these out of the default walker:
+# some historical tables reuse similarly named fields, so new alignments are
+# collected as missing-only evidence and cannot change existing mappings.
+EXTENDED_IDENTITY_FIELDS = (
+    "groupId",
+    "avatarId",
+    "funcId",
+    "bgId",
+    "storySetId",
+    "skinGroupId",
+    "configId",
+    "tagId",
+    "limitInfoId",
+)
+
 
 def indexed_list(items: list[Any]) -> dict[str, Any] | None:
     if not items or not all(isinstance(item, dict) for item in items):
@@ -187,6 +203,125 @@ def indexed_list(items: list[Any]) -> dict[str, Any] | None:
             if len(result) == len(items):
                 return result
     return None
+
+
+def _paired_indexed_lists(
+    source: list[Any],
+    target: list[Any],
+    fields: tuple[str, ...],
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Find a shared, unique record key present in both locale lists."""
+    if (
+        not source
+        or not target
+        or not all(isinstance(item, dict) for item in source)
+        or not all(isinstance(item, dict) for item in target)
+    ):
+        return None
+    for field in fields:
+        if not all(field in item for item in source + target):
+            continue
+        source_values = [item[field] for item in source]
+        target_values = [item[field] for item in target]
+        if not all(isinstance(value, (str, int)) for value in source_values + target_values):
+            continue
+        source_keys = [str(value) for value in source_values]
+        target_keys = [str(value) for value in target_values]
+        if (
+            len(set(source_keys)) != len(source_keys)
+            or len(set(target_keys)) != len(target_keys)
+        ):
+            continue
+        source_index = dict(zip(source_keys, source))
+        target_index = dict(zip(target_keys, target))
+        if source_index.keys() & target_index.keys():
+            return field, source_index, target_index
+    return None
+
+
+def _walk_pairs_with_extended_identity(
+    source: Any,
+    target: Any,
+    path: tuple[str, ...],
+) -> Iterator[tuple[str, str, tuple[str, ...]]]:
+    """Walk a safely matched record subtree using all approved stable keys."""
+    if isinstance(source, str) and isinstance(target, str):
+        yield source, target, path
+        return
+    if isinstance(source, dict) and isinstance(target, dict):
+        for key in source.keys() & target.keys():
+            yield from _walk_pairs_with_extended_identity(
+                source[key], target[key], path + (str(key),)
+            )
+        return
+    if isinstance(source, list) and isinstance(target, list):
+        indexed = _paired_indexed_lists(
+            source, target, IDENTITY_FIELDS + EXTENDED_IDENTITY_FIELDS
+        )
+        if indexed is not None:
+            field, source_index, target_index = indexed
+            for key in source_index.keys() & target_index.keys():
+                yield from _walk_pairs_with_extended_identity(
+                    source_index[key], target_index[key], path + (key,)
+                )
+            return
+        if len(source) == len(target):
+            for index, (source_item, target_item) in enumerate(zip(source, target)):
+                yield from _walk_pairs_with_extended_identity(
+                    source_item, target_item, path + (str(index),)
+                )
+
+
+def walk_unpaired_identity_pairs(
+    source: Any,
+    target: Any,
+    path: tuple[str, ...] = (),
+    stats: dict[str, int] | None = None,
+) -> Iterator[tuple[str, str, tuple[str, ...]]]:
+    """Recover only text inside unequal lists matched by an extra stable ID.
+
+    The ordinary walker remains authoritative for existing alignments. This
+    helper contributes records the ordinary walker skips because list lengths
+    differ, and recursively searches already aligned parents for such lists.
+    """
+    if isinstance(source, dict) and isinstance(target, dict):
+        for key in source.keys() & target.keys():
+            yield from walk_unpaired_identity_pairs(
+                source[key], target[key], path + (str(key),), stats
+            )
+        return
+    if not isinstance(source, list) or not isinstance(target, list):
+        return
+
+    base_index = _paired_indexed_lists(source, target, IDENTITY_FIELDS)
+    if base_index is not None:
+        _, source_index, target_index = base_index
+        for key in source_index.keys() & target_index.keys():
+            yield from walk_unpaired_identity_pairs(
+                source_index[key], target_index[key], path + (key,), stats
+            )
+        return
+    if len(source) == len(target):
+        for index, (source_item, target_item) in enumerate(zip(source, target)):
+            yield from walk_unpaired_identity_pairs(
+                source_item, target_item, path + (str(index),), stats
+            )
+        return
+
+    extended_index = _paired_indexed_lists(
+        source, target, IDENTITY_FIELDS + EXTENDED_IDENTITY_FIELDS
+    )
+    if extended_index is None:
+        return
+    field, source_index, target_index = extended_index
+    if field not in EXTENDED_IDENTITY_FIELDS:
+        return
+    if stats is not None:
+        stats[field] = stats.get(field, 0) + 1
+    for key in source_index.keys() & target_index.keys():
+        yield from _walk_pairs_with_extended_identity(
+            source_index[key], target_index[key], path + (key,)
+        )
 
 
 def walk_paired(
